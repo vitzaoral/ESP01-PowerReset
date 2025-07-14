@@ -1,6 +1,6 @@
 #define BLYNK_TEMPLATE_ID        "TMPL43MLLd5DU"
 #define BLYNK_TEMPLATE_NAME      "Power reset"
-#define BLYNK_FIRMWARE_VERSION   "1.0.1"
+#define BLYNK_FIRMWARE_VERSION   "1.0.4"
 #define BLYNK_PRINT              Serial
 
 #include <Arduino.h>
@@ -17,7 +17,8 @@ Settings settings;
 const uint8_t  RELAY_PIN       = 5; // GPIO5 == D1
 const uint8_t  LED_PIN         = 2;
 const unsigned long RESET_TIME = 10000UL;  // 10 s pulse
-const unsigned long SLEEP_SEC  = 15UL;     // 15 s deep-sleep
+//const unsigned long SLEEP_SEC  = 15UL; //  15 sec deep-sleep
+ const unsigned long SLEEP_SEC  = 15UL * 60UL;    // 15 min deep-sleep
 const unsigned long OTA_TIMEOUT = 30000UL; // 30 s timeout pro OTA
 
 volatile bool resetPending = false;
