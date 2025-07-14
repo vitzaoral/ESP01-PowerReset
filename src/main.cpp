@@ -1,11 +1,12 @@
 #define BLYNK_TEMPLATE_ID        "TMPL43MLLd5DU"
 #define BLYNK_TEMPLATE_NAME      "Power reset"
-#define BLYNK_FIRMWARE_VERSION   "2.1.0"
+#define BLYNK_FIRMWARE_VERSION   "1.0.1"
 #define BLYNK_PRINT              Serial
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266httpUpdate.h>
+#include <ESP8266HTTPClient.h>
 #include <BlynkSimpleEsp8266.h>
 #include <time.h>
 #include "../src/settings.cpp"
@@ -17,8 +18,11 @@ const uint8_t  RELAY_PIN       = 5; // GPIO5 == D1
 const uint8_t  LED_PIN         = 2;
 const unsigned long RESET_TIME = 10000UL;  // 10 s pulse
 const unsigned long SLEEP_SEC  = 15UL;     // 15 s deep-sleep
+const unsigned long OTA_TIMEOUT = 30000UL; // 30 s timeout pro OTA
 
 volatile bool resetPending = false;
+volatile bool otaInProgress = false;
+String overTheAirURL = "";
 
 // Blynk terminal on V1
 WidgetTerminal terminal(V1);
@@ -59,6 +63,13 @@ void doResetPulse() {
   unsigned long t0 = millis();
   while (millis() - t0 < RESET_TIME) {
     Blynk.run();  // service Blynk to avoid WDT
+    
+    if (otaInProgress) {
+      terminal.println(getTimestamp() + " - OTA interrupted reset");
+      terminal.flush();
+      return; // Cancel reset because of OTA
+    }
+    
     delay(10);
   }
 
@@ -71,6 +82,54 @@ void doResetPulse() {
   terminal.flush();
 
   goToSleep();
+}
+
+// --- OTA handler ---
+BLYNK_WRITE(InternalPinOTA) {
+  otaInProgress = true;
+  overTheAirURL = param.asString();
+  
+  String ts = getTimestamp();
+  terminal.println(ts + " - OTA started");
+  terminal.print("URL: ");
+  terminal.println(overTheAirURL);
+  terminal.flush();
+
+  Serial.println("OTA Started");
+  Serial.print("overTheAirURL = ");
+  Serial.println(overTheAirURL);
+
+  digitalWrite(RELAY_PIN, HIGH);
+  digitalWrite(LED_PIN, HIGH);
+
+  WiFiClient client;
+  HTTPClient http;
+  
+  http.setTimeout(15000);
+  http.begin(client, overTheAirURL);
+
+  t_httpUpdate_return ret = ESPhttpUpdate.update(client, overTheAirURL);
+  
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      terminal.println(getTimestamp() + " - OTA FAILED: " + ESPhttpUpdate.getLastErrorString());
+      Serial.println("[update] Update failed.");
+      Serial.println("Error: " + ESPhttpUpdate.getLastErrorString());
+      break;
+      
+    case HTTP_UPDATE_NO_UPDATES:
+      terminal.println(getTimestamp() + " - OTA: No updates available");
+      Serial.println("[update] Update no Update.");
+      break;
+      
+    case HTTP_UPDATE_OK:
+      terminal.println(getTimestamp() + " - OTA: Update OK, rebooting...");
+      Serial.println("[update] Update ok."); // may not be called since we reboot the ESP
+      break;
+  }
+  
+  terminal.flush();
+  otaInProgress = false;
 }
 
 // --- catch the virtual button press ---
@@ -108,7 +167,7 @@ void setup() {
     Blynk.run();
   }
 
-  // sync only V0’s state (will set resetPending if ON)
+  // sync only V0's state (will set resetPending if ON)
   Blynk.syncVirtual(V0);
 
   // give the sync a moment to invoke the handler
@@ -117,11 +176,38 @@ void setup() {
     Blynk.run();
   }
 
-  // decide: reset or sleep
-  if (resetPending) {
-    doResetPulse();
-  } else {
-    goToSleep();
+  if (Blynk.connected()) {
+    Blynk.virtualWrite(V2, WiFi.localIP().toString());
+    Blynk.virtualWrite(V3, WiFi.RSSI());
+    Blynk.virtualWrite(V4, BLYNK_FIRMWARE_VERSION);
+  }
+
+  unsigned long mainLoopStart = millis();
+  
+  while (true) {
+    Blynk.run();
+    
+    // OTA timeout
+    if (otaInProgress && millis() - mainLoopStart > OTA_TIMEOUT) {
+      terminal.println(getTimestamp() + " - OTA timeout, continuing normal operation");
+      terminal.flush();
+      otaInProgress = false;
+    }
+    
+    // OTA running? Wait..
+    if (otaInProgress) {
+      delay(100);
+      continue;
+    }
+    
+    // No OTA, go on, reset or sleep!
+    if (resetPending) {
+      doResetPulse();
+      break;
+    } else {
+      goToSleep();
+      break;
+    }
   }
 }
 
